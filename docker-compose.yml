@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  po-monitoring:
+    container_name: po-monitoring
+    build: .
+    ports:
+      - "8555:8555"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
