@@ -1,0 +1,158 @@
+import streamlit as st
+import sqlite3
+from datetime import datetime, date
+import pandas as pd
+
+# ================= CONFIG =================
+st.set_page_config(page_title="PO Monitoring Dashboard", page_icon="📊", layout="wide")
+DB_PATH = "po_monitoring.db"
+
+# ================= DATABASE =================
+def get_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+conn = get_conn()
+c = conn.cursor()
+
+c.execute('''
+CREATE TABLE IF NOT EXISTS po (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_name TEXT,
+    description TEXT,
+    division TEXT,
+    quotation_no TEXT,
+    po_no TEXT,
+    po_received_date TEXT,
+    expected_eta TEXT,
+    actual_eta TEXT,
+    top TEXT,
+    payment_progress INTEGER,
+    remarks TEXT,
+    created_at TEXT
+)
+''')
+conn.commit()
+
+# ================= STYLE =================
+st.markdown("""
+<style>
+.block-container {padding-top:2rem;}
+.po-card {
+    background:#1c1f26;
+    padding:18px;
+    border-radius:14px;
+    margin-bottom:12px;
+}
+.status-open {border-left:6px solid #f59e0b;}
+.status-done {border-left:6px solid #22c55e;}
+.status-overdue {border-left:6px solid #ef4444;}
+.small {color:#9ca3af;font-size:13px;}
+</style>
+""", unsafe_allow_html=True)
+
+# ================= HEADER =================
+st.title("📊 PO Monitoring Dashboard")
+st.caption("Tabs by Division / Status | CRUD Monitoring")
+
+# ================= LOAD DATA =================
+df = pd.read_sql("SELECT * FROM po", conn)
+
+def get_status(row):
+    if row['actual_eta']:
+        return 'done'
+    elif pd.to_datetime(row['expected_eta']) < pd.Timestamp.today():
+        return 'overdue'
+    else:
+        return 'open'
+
+if not df.empty:
+    df['status'] = df.apply(get_status, axis=1)
+
+# ================= KPI =================
+col1, col2, col3 = st.columns(3)
+total_po = len(df)
+done_po = len(df[df['status']=='done']) if not df.empty else 0
+overdue_po = len(df[df['status']=='overdue']) if not df.empty else 0
+
+col1.metric("Total PO", total_po)
+col2.metric("Completed", done_po)
+col3.metric("Overdue", overdue_po)
+
+st.divider()
+
+# ================= FORM =================
+st.subheader("➕ Input PO")
+with st.form("po_form", clear_on_submit=True):
+    a,b,c1 = st.columns(3)
+    customer = a.text_input("Customer Name")
+    division = b.text_input("Division")
+    quotation = c1.text_input("Quotation No")
+
+    d,e,f = st.columns(3)
+    po_no = d.text_input("PO No")
+    top = e.text_input("TOP")
+    payment = f.slider("Payment Progress (%)",0,100,0)
+
+    description = st.text_area("Description")
+
+    g,h,i = st.columns(3)
+    po_date = g.date_input("PO Received Date", date.today())
+    exp_eta = h.date_input("Expected ETA", date.today())
+    act_eta = i.date_input("Actual ETA", value=None)
+
+    remarks = st.text_area("Remarks")
+
+    submit = st.form_submit_button("💾 Save PO")
+    if submit:
+        c.execute("""
+            INSERT INTO po (customer_name,description,division,quotation_no,po_no,
+            po_received_date,expected_eta,actual_eta,top,payment_progress,remarks,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """,(
+            customer,description,division,quotation,po_no,
+            po_date.isoformat(),exp_eta.isoformat(),
+            act_eta.isoformat() if act_eta else None,
+            top,payment,remarks,datetime.now().isoformat()
+        ))
+        conn.commit()
+        st.success("PO saved")
+        st.experimental_rerun()
+
+# ================= TABS =================
+st.subheader("📁 PO Monitoring")
+
+if df.empty:
+    st.info("No PO data available")
+else:
+    divisions = sorted(df['division'].unique())
+    status_tabs = st.tabs(["All","Open","Overdue","Completed"])
+
+    status_map = {
+        "All": df,
+        "Open": df[df['status']=='open'],
+        "Overdue": df[df['status']=='overdue'],
+        "Completed": df[df['status']=='done']
+    }
+
+    for tab, key in zip(status_tabs, status_map):
+        with tab:
+            data = status_map[key]
+            for div in divisions:
+                sub = data[data['division']==div]
+                if sub.empty:
+                    continue
+                st.markdown(f"### 📂 {div}")
+                for _, row in sub.iterrows():
+                    status_class = f"status-{row['status']}"
+                    st.markdown(f"""
+                    <div class="po-card {status_class}">
+                        <b>{row['customer_name']}</b> — PO: {row['po_no']}<br>
+                        <span class="small">Quotation: {row['quotation_no']} | TOP: {row['top']}</span><br>
+                        <b>ETA:</b> {row['expected_eta']} → {row['actual_eta']}<br>
+                        <b>Payment:</b> {row['payment_progress']}%<br>
+                        <span class="small">{row['remarks']}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+# ================= FOOTER =================
+st.caption("© 2025 PO Monitoring System")
